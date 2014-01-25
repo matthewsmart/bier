@@ -4,71 +4,104 @@
 ; using http://morebeer.com/brewingtechniques/library/backissues/issue2.1/manning.html
 ; estimate yields http://www.howtobrew.com/section2/chapter12-4-1.html
 
-(def bier (hash-map :og 1.09 :ibu 50 :l 10 :batch 5.25))
+; Define your beer up here
+(def bier { :og 1.09 :ibu 50 :l 10 :batch 5.25 })
 (def eff 0.85)
-;                  %W   Ing.               EY   L
-(def malts (list '(0.8  "Ashburne Mild"    1.   5.3)
-                 '(0.05 "Black Malt"       0.55 474.)
-                 '(0.05 "Crystal 120"      0.72 120.)
-                 '(0.05 "Honey Malt"       0.75 22.5)
-                 '(0.05 "Munich Malt Dark" 0.75 9.)))
 
-(def hops (list '(1. "amarillo" 0.082 60. 0.25)))
+(def malts [{ :percent 0.8  :name "Ashburne Mild"    :py 1.   :l 5.3  }
+            { :percent 0.05 :name "Black Malt"       :py 0.55 :l 474. }
+            { :percent 0.05 :name "Crystal 120"      :py 0.72 :l 120. }
+            { :percent 0.05 :name "Honey Malt"       :py 0.75 :l 22.5 }
+            { :percent 0.05 :name "Munich Malt Dark" :py 0.75 :l 9.   }])
 
+(def hops [{ :percent 1. :name "Amarillo" :alpha-acid 0.082 :boil-time 60. :utilization 0.25}])
+
+(def evap-rate 1.15) ; gal/hour
+(def boil-time 1.25) ; hours
+(def quarts-per-pound 1.)
+
+; Malting functions
 (defn calc-extracts
   "Calculates the extract from the malt"
   [malt]
-  (* (nth malt 0) (nth malt 2) eff))
-
-(def extracts (map calc-extracts malts))
-
-(defn calc-colours
-  "Calculates the colour from the malt"
-  [malt]
-  (* (nth malt 0) (nth malt 3)))
-
-(def colours (map calc-colours malts))
-
-(def total-extract (reduce + extracts))
+  (* (:percent malt) (:py malt) eff))
 
 (def total-weight
-  (/ (* (+ (get bier :og) -1.) 1000 (get bier :batch))
-   (* total-extract 46.31)))
+  (let [total-extract
+        (let [extracts (map calc-extracts malts)] (reduce + extracts))]
+    (/ (* (+ (:og bier) -1.) 1000 (:batch bier))
+       (* total-extract 46.31))))
 
 (defn weigh-malt
   "Use total weight to calculate ingredient weight"
   [malt]
-  (* (nth malt 0) total-weight))
+  (* (:percent malt) total-weight))
 
-(def ingredient-weights (map weigh-malt malts))
+(def malt-weights
+  (let [ingredient-weights (vec (map weigh-malt malts))]
+    (apply str (for [idx (range 0 (count ingredient-weights))]
+                 (format "%16s: %5.2f lbs\n"  (:name (malts idx)) (ingredient-weights idx))))))
 
-(defn render-weights
-  "Prints the weights of the malts"
-  []
-  (for [idx (range 0 (count ingredient-weights))]
-    (str "  " (nth (nth malts idx) 1) ": " (nth ingredient-weights idx) "lbs\n")))
+; Colour functions
+(defn calc-colours
+  "Calculates the colour from the malt"
+  [malt]
+  (* (:percent malt) (:l malt)))
 
-(def total-colour
-  (reduce + colours))
-(def predicted-colour (/ (* total-colour total-weight) (get bier :batch)))
+(def predicted-colour
+  (let [total-colour (reduce + (map calc-colours malts))]
+    (/ (* total-colour total-weight) (:batch bier))))
 
-(defn calc-iso-a-acid
-  ""
+; Hops funcs
+(defn calc-iso-acid
+  "Calculate the iso acid of an individual ingredient"
   [hop]
-  (* (nth hop 0) (nth hop 2) (nth hop 4) 7490))
+  (* (:percent hop) (:alpha-acid hop) (:utilization hop) 7490))
 
-(def iso-a-acids (map calc-iso-a-acid hops))
-(def total-iso-a-acid (reduce + iso-a-acids))
+(def total-hop-weight
+  (let [total-iso-acid (reduce + (map calc-iso-acid hops))]
+    (/ (* (:ibu bier) (:batch bier)) total-iso-acid)))
 
-(def total-hop-weight (/ (* (get bier :ibu) (get bier :batch)) total-iso-a-acid))
-(eval total-hop-weight)
+(defn weigh-hops
+  "Calculate the weight of each hops"
+  [hop]
+  (* (:percent hop) total-hop-weight))
+
+(def hop-weights
+  (let [vec-hop-weights (vec (map weigh-hops hops))]
+    (apply str (for [idx (range 0 (count vec-hop-weights))]
+                 (format "%16s: %4.2f oz\n" (:name (hops idx)) (vec-hop-weights idx))))))
+
+; Volume equations
+
+(def kettle-volume
+  (let [water-evaporated (* evap-rate boil-time)]
+    (+ (:batch bier) water-evaporated)))
+
+(def mash-water
+  (let [gal-per-pound (/ quarts-per-pound 4)]
+    (* gal-per-pound total-weight)))
+
+(def sparge-water
+  (let [water-absorbed (* 0.1 total-weight)]
+    (+ (- kettle-volume mash-water) water-absorbed)))
+
+(def sparge-to-mash (/ sparge-water mash-water))
 
 (defn -main
   ""
   [& args]
   (println bier)
-  (println (str "Total Weight: " total-weight))
+  (printf "Total Weight: %5.2f\n" total-weight)
   (println "Malt Weights:")
-  (apply print (render-weights))
-  (println (str "Predicted colour: " predicted-colour))
-  (println (str "Total Hop Weight: " total-hop-weight "oz")))
+  (print malt-weights)
+  (printf "Predicted colour: %3.0f L\n" predicted-colour)
+  (println "Hops Weights:")
+  (print hop-weights)
+  (println "Volumes:")
+  (printf " Kettle Volume: %2.2f gal\n" kettle-volume)
+  (printf "    Mash Water: %2.2f gal\n" mash-water)
+  (printf "  Sparge Water: %2.2f gal\n" sparge-water)
+  (printf "         Ratio: %1.2f (aim for 1.5)\n" sparge-to-mash)
+  (printf "Boil time: %1.2f hours\n" boil-time)
+  )
